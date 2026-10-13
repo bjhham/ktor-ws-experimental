@@ -1,0 +1,18 @@
+product: jvm/lib
+
+dependencies:
+  - ../core: exported
+  - $libs.ktor.server.core
+  - $libs.ktor.server.netty
+  - $libs.ktor.server.websockets
+  - $libs.ktor.websockets
+  - $libs.ktor.websockets.serialization
+
+test-dependencies:
+  - ../client
+  - $libs.ktor.client.websockets
+  - $libs.ktor.server.testHost
+
+settings:
+  kotlin:
+    serialization: enabled

@@ -1,0 +1,16 @@
+product:
+  type: kmp/lib
+  platforms: [ jvm, js ]
+
+dependencies:
+  - $libs.ktor.utils: exported
+  - $libs.ktor.websockets: exported
+  - $libs.ktor.serialization.kotlinx.json: exported
+  - org.jetbrains.kotlinx:atomicfu:0.29.0
+
+test-dependencies:
+  - org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2
+
+settings:
+  kotlin:
+    serialization: enabled
