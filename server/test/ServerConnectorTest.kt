@@ -1,6 +1,6 @@
 package io.ktor.server.messaging
 
-import io.ktor.client.messaging.WebSocketTransport
+import io.ktor.client.messaging.WebSocket
 import io.ktor.client.messaging.connect
 import io.ktor.client.messaging.with
 import io.ktor.messaging.*
@@ -30,13 +30,13 @@ class ServerConnectorTest {
         install(WebSockets)
         routing {
             route("/shout") {
-                accept(WebSocketEndpoint.with(shouts)) {
+                listen(WebSocketEndpoint.with(shouts)) {
                     for (shout in incoming) outgoing.send(Shout(shout.text.uppercase()))
                 }
             }
         }
         val client = createClient { install(ClientWebSockets) }
-        val connection = client.connect(WebSocketTransport.with(shouts), "/shout")
+        val connection = client.connect(WebSocket.with(shouts), "/shout")
         connection.outgoing.send(Shout("hello"))
         assertEquals(Shout("HELLO"), connection.incoming.receive())
         connection.close()
@@ -47,13 +47,13 @@ class ServerConnectorTest {
         install(WebSockets)
         routing {
             route("/once") {
-                accept(WebSocketEndpoint) {
+                listen(WebSocketEndpoint) {
                     outgoing.send(Frame.Text("only"))
                 }
             }
         }
         val client = createClient { install(ClientWebSockets) }
-        val connection = client.connect(WebSocketTransport, "/once")
+        val connection = client.connect(WebSocket, "/once")
         assertEquals("only", (connection.incoming.receive() as Frame.Text).readText())
         assertTrue(connection.incoming.receiveCatching().isClosed)
     }

@@ -13,12 +13,12 @@ import kotlinx.coroutines.isActive
 import kotlin.coroutines.CoroutineContext
 
 /**
- * Establishes [MessageConnection]s: a transport (e.g. [WebSocketTransport]), optionally wrapped with
+ * Establishes [ChannelConnection]s: a transport (e.g. [WebSocket]), optionally wrapped with
  * [ConnectionLayer]s ([with]) and client-only behaviour such as [withReconnect] or [orElse].
  */
 @ExperimentalKtorApi
 fun interface ClientConnector<Out, In> {
-    suspend fun connect(context: ConnectionContext, request: ConnectRequest): MessageConnection<Out, In>
+    suspend fun connect(context: ConnectionContext, request: ConnectRequest): ChannelConnection<Out, In>
 }
 
 /**
@@ -44,7 +44,7 @@ val ConnectionContext.httpClient: HttpClient
         ?: throw IllegalArgumentException("This transport requires an HttpClient, but the context is $this")
 
 /** Where and how to connect. [url] may be relative, to be resolved by the transport (e.g. by `DefaultRequest`). */
-class ConnectRequest(
+data class ConnectRequest(
     val url: String,
     val headers: Headers = Headers.Empty,
     /** Settings for transports and layers. */
@@ -67,14 +67,49 @@ object ConnectionAttributes {
     val ResponseHeaders: AttributeKey<Headers> = AttributeKey("ConnectionResponseHeaders")
 }
 
-/** Connects to [url] using [connector]. */
+/** Connects to [request] using [connector]. */
 @ExperimentalKtorApi
 suspend fun <Out, In> HttpClient.connect(
     connector: ClientConnector<Out, In>,
-    url: String = "",
-    block: ConnectRequestBuilder.() -> Unit = {},
-): MessageConnection<Out, In> =
-    connector.connect(HttpClientConnectionContext(this), ConnectRequestBuilder(url).apply(block).build())
+    request: ConnectRequest,
+    handleConnection: suspend ChannelConnection<Out, In>.() -> Unit,
+) = handleConnection(connector.connect(
+    HttpClientConnectionContext(this),
+    request
+))
+
+/** Connects to [uri] using [connector]. */
+@ExperimentalKtorApi
+suspend fun <Out, In> HttpClient.connect(
+    connector: ClientConnector<Out, In>,
+    uri: String,
+    handleConnection: suspend ChannelConnection<Out, In>.() -> Unit,
+) = handleConnection(connector.connect(
+    HttpClientConnectionContext(this),
+    ConnectRequest(uri)
+))
+
+/** Connects to [uri] using [connector]. */
+@ExperimentalKtorApi
+suspend fun <Out, In> HttpClient.connect(
+    connector: ClientConnector<Out, In>,
+    uri: String = "",
+): ChannelConnection<Out, In> =
+    connector.connect(
+        HttpClientConnectionContext(this),
+        ConnectRequest(uri)
+    )
+
+/** Connects to [request] using [connector]. */
+@ExperimentalKtorApi
+suspend fun <Out, In> HttpClient.connect(
+    connector: ClientConnector<Out, In>,
+    request: ConnectRequest,
+): ChannelConnection<Out, In> =
+    connector.connect(
+        HttpClientConnectionContext(this),
+        request
+    )
 
 /** Applies [layer] to every connection made by this connector. */
 @ExperimentalKtorApi

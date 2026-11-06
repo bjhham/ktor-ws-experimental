@@ -13,13 +13,13 @@ import kotlinx.serialization.StringFormat
 import kotlinx.serialization.serializer
 
 /**
- * Accepts incoming [MessageConnection]s on a route: a transport (e.g. [WebSocketEndpoint]),
+ * Accepts incoming [ChannelConnection]s on a route: a transport (e.g. [WebSocketEndpoint]),
  * optionally wrapped with the same [ConnectionLayer]s as client connectors ([with]).
  */
 @ExperimentalKtorApi
 fun interface ServerConnector<Out, In> {
     /** Installs the transport on [route]; [handler] is called for every accepted connection. */
-    fun install(route: Route, handler: suspend (MessageConnection<Out, In>) -> Unit)
+    fun install(route: Route, handler: suspend (ChannelConnection<Out, In>) -> Unit)
 }
 
 /**
@@ -27,9 +27,9 @@ fun interface ServerConnector<Out, In> {
  * after delivering the messages it sent; if [handler] fails, the connection is closed with that failure.
  */
 @ExperimentalKtorApi
-fun <Out, In> Route.accept(
+fun <Out, In> Route.listen(
     connector: ServerConnector<Out, In>,
-    handler: suspend MessageConnection<Out, In>.() -> Unit,
+    handler: suspend ChannelConnection<Out, In>.() -> Unit,
 ): Route {
     connector.install(this) { connection ->
         var failure: Throwable? = null
@@ -59,7 +59,7 @@ object WebSocketEndpoint : WebSocketAcceptor()
 
 /** WebSocket endpoint; with a [protocol], only clients offering that subprotocol are accepted. */
 open class WebSocketAcceptor(val protocol: String? = null) : ServerConnector<Frame, Frame> {
-    override fun install(route: Route, handler: suspend (MessageConnection<Frame, Frame>) -> Unit) {
+    override fun install(route: Route, handler: suspend (ChannelConnection<Frame, Frame>) -> Unit) {
         route.webSocket(protocol = protocol) {
             val connection = toConnection()
             protocol?.let { connection.attributes.put(WebSocketAttributes.Subprotocol, it) }

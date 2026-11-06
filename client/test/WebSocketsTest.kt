@@ -1,5 +1,6 @@
 package io.ktor.client.messaging
 
+import io.ktor.client.HttpClient
 import io.ktor.server.testing.*
 import io.ktor.server.websocket.*
 import io.ktor.utils.io.*
@@ -25,7 +26,17 @@ class WebSocketsTest {
             }
         }
 
-        val connection = createClient { install(ClientWebSockets) }.connect(WebSocketTransport)
+        val connection = clientWithWs.connect(WebSocket)
+        for (message in connection.incoming) {
+            if (message !is Frame.Text) continue
+            val number = message.readText().toInt()
+            val response = buildString {
+                if (number % 3 == 0) append("Fizz")
+                if (number % 5 == 0) append("Buzz")
+            }.takeIf { it.isNotEmpty() } ?: continue
+            connection.outgoing.send(Frame.Text(response))
+        }
+
         assertEquals("Hello", (connection.incoming.receive() as Frame.Text).readText())
         connection.outgoing.send(Frame.Text("Hello"))
         connection.close()
@@ -41,7 +52,8 @@ class WebSocketsTest {
                 assertEquals("Hello", reply.text)
             }
         }
-        val connection = createClient { install(ClientWebSockets) }.connect(WebSocketTransport.withFormat<TextMessage>(Json))
+        val connectorWithFormat = WebSocket.withFormat<TextMessage>(Json)
+        val connection = clientWithWs.connect(connectorWithFormat)
         assertEquals("Hello", connection.incoming.receive().text)
         connection.outgoing.send(TextMessage("Hello"))
         connection.close()
@@ -51,17 +63,23 @@ class WebSocketsTest {
     fun `remote close ends the connection`() = testApplication {
         install(WebSockets)
         routing {
-            webSocket { send(Frame.Text("Bye")) }
+            webSocket {
+                incoming.onReceive
+                send(Frame.Text("Bye"))
+            }
         }
-        val connection = createClient { install(ClientWebSockets) }.connect(WebSocketTransport)
+        val connection = clientWithWs.connect(WebSocket)
         assertEquals("Bye", (connection.incoming.receive() as Frame.Text).readText())
         assertEquals(true, connection.incoming.receiveCatching().isClosed)
     }
 
+    private val ApplicationTestBuilder.clientWithWs get(): HttpClient =
+        createClient { install(ClientWebSockets) }
+
     @Test
     fun `missing plugin is reported`() = testApplication {
         install(WebSockets)
-        val error = assertFailsWith<IllegalStateException> { client.connect(WebSocketTransport) }
+        val error = assertFailsWith<IllegalStateException> { client.connect(WebSocket) }
         assertContains(error.message.orEmpty(), "install(WebSockets)")
     }
 }

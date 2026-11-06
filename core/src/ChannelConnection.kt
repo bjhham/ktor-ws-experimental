@@ -15,8 +15,24 @@ import kotlinx.coroutines.launch
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 
+interface AttributesHolder {
+    val attributes: Attributes
+}
+
+interface AsyncCloseable {
+    suspend fun close(cause: Throwable? = null)
+}
+
+interface Receiver<out In>: AsyncCloseable, AttributesHolder {
+    val incoming: ReceiveChannel<In>
+}
+
+interface Broadcast<in Out>: AsyncCloseable, AttributesHolder {
+    val outgoing: SendChannel<Out>
+}
+
 /**
- * A two-way message connection: [Out] messages are sent through [outgoing], [In] messages arrive on [incoming].
+ * A two-way connection: [Out] messages are sent through [outgoing], [In] messages arrive on [incoming].
  *
  * Lifecycle:
  * - The connection is a [CoroutineScope] whose [Job] lives exactly as long as the connection. Coroutines that
@@ -27,21 +43,12 @@ import kotlin.coroutines.EmptyCoroutineContext
  *   Closing [outgoing] has the same effect, without waiting.
  * - Cancelling the scope (`connection.cancel()`) aborts the connection immediately.
  */
-interface MessageConnection<in Out, out In> : CoroutineScope {
-    val incoming: ReceiveChannel<In>
-    val outgoing: SendChannel<Out>
-
-    /** Information about the connection, e.g. handshake results; every layer may add its own entries. */
-    val attributes: Attributes
-
-    /** Delivers pending outgoing messages, then closes the connection; a non-null [cause] marks a failure. */
-    suspend fun close(cause: Throwable? = null)
-
+interface ChannelConnection<in Out, out In> : Receiver<In>, Broadcast<Out>, CoroutineScope {
     companion object
 }
 
 /** A connection with the same message type in both directions. */
-typealias Duplex<M> = MessageConnection<M, M>
+typealias ChannelDuplex<M> = ChannelConnection<M, M>
 
 /**
  * Creates a connection whose channels are served by two worker coroutines.
@@ -56,7 +63,7 @@ typealias Duplex<M> = MessageConnection<M, M>
  *
  * Coroutines launched from the [receive] or [send] scopes are cancelled when the connection ends.
  */
-fun <Out, In> MessageConnection(
+fun <Out, In> ChannelConnection(
     parent: CoroutineContext,
     attributes: Attributes = Attributes(concurrent = true),
     incomingCapacity: Int = Channel.BUFFERED,
@@ -65,7 +72,7 @@ fun <Out, In> MessageConnection(
     send: suspend CoroutineScope.(outgoing: ReceiveChannel<Out>) -> Unit,
     onClose: suspend (cause: Throwable?) -> Unit = {},
     onRelease: (cause: Throwable?) -> Unit = {},
-): MessageConnection<Out, In> =
+): ChannelConnection<Out, In> =
     PipedConnection(parent, attributes, incomingCapacity, outgoingCapacity, receive, send, onClose, onRelease)
         .also { it.start() }
 
@@ -78,13 +85,13 @@ fun <Out, In> MessageConnection(
  *   coroutines launched in its scope (e.g. heart-beats) are cancelled when the new connection ends.
  * - [send] reads from the new connection's `outgoing` and writes to this connection's `outgoing`.
  */
-fun <BaseOut, BaseIn, Out, In> MessageConnection<BaseOut, BaseIn>.layer(
+fun <BaseOut, BaseIn, Out, In> ChannelConnection<BaseOut, BaseIn>.layer(
     attributes: Attributes = this.attributes,
     receive: suspend CoroutineScope.(from: ReceiveChannel<BaseIn>, to: SendChannel<In>) -> Unit,
     send: suspend CoroutineScope.(from: ReceiveChannel<Out>, to: SendChannel<BaseOut>) -> Unit,
-): MessageConnection<Out, In> {
+): ChannelConnection<Out, In> {
     val base = this
-    return MessageConnection(
+    return ChannelConnection(
         parent = base.coroutineContext,
         attributes = attributes,
         receive = { to -> receive(base.incoming, to) },
@@ -98,13 +105,13 @@ fun <BaseOut, BaseIn, Out, In> MessageConnection<BaseOut, BaseIn>.layer(
  * Creates two connected in-memory endpoints: what one sends, the other receives.
  * Closing or failing one side ends the other one as well. Useful for tests and in-process communication.
  */
-fun <A, B> MessageConnection.Companion.pair(
+fun <A, B> ChannelConnection.Companion.pair(
     parent: CoroutineContext = EmptyCoroutineContext,
     capacity: Int = Channel.BUFFERED,
-): Pair<MessageConnection<A, B>, MessageConnection<B, A>> {
+): Pair<ChannelConnection<A, B>, ChannelConnection<B, A>> {
     val aToB = Channel<A>(capacity)
     val bToA = Channel<B>(capacity)
-    fun <O, I> endpoint(out: Channel<O>, into: Channel<I>) = MessageConnection<O, I>(
+    fun <O, I> endpoint(out: Channel<O>, into: Channel<I>) = ChannelConnection(
         parent = parent,
         receive = { incoming -> for (message in into) incoming.send(message) },
         send = { outgoing -> for (message in outgoing) out.send(message) },
@@ -133,7 +140,7 @@ internal class PipedConnection<Out, In>(
     private val sender: suspend CoroutineScope.(ReceiveChannel<Out>) -> Unit,
     private val onClose: suspend (Throwable?) -> Unit,
     private val onRelease: (Throwable?) -> Unit,
-) : MessageConnection<Out, In> {
+) : ChannelConnection<Out, In> {
     private val job = Job(parent[Job])
     override val coroutineContext: CoroutineContext = parent + job
 
@@ -141,10 +148,10 @@ internal class PipedConnection<Out, In>(
     private val workers = Job(job)
     private val workerScope = CoroutineScope(coroutineContext + workers)
 
-    private val incomingChannel = Channel<In>(incomingCapacity)
-    private val outgoingChannel = Channel<Out>(outgoingCapacity)
-    override val incoming: ReceiveChannel<In> get() = incomingChannel
-    override val outgoing: SendChannel<Out> get() = outgoingChannel
+    override val incoming: ReceiveChannel<In>
+        field = Channel<In>(incomingCapacity)
+    override val outgoing: SendChannel<Out>
+        field = Channel<Out>(outgoingCapacity)
 
     private class Closing(val cause: Throwable?)
 
@@ -161,7 +168,7 @@ internal class PipedConnection<Out, In>(
         }
         workerScope.launch {
             val failure = try {
-                receiver(incomingChannel)
+                receiver(incoming)
                 null
             } catch (e: Throwable) {
                 // when cancelled, the connection is terminating already
@@ -172,10 +179,10 @@ internal class PipedConnection<Out, In>(
         }
         sendJob = workerScope.launch {
             try {
-                sender(outgoingChannel)
+                sender(outgoing)
             } catch (e: ClosedSendChannelException) {
                 // the underlying transport is gone; the receiving side reports how the connection ended
-                outgoingChannel.close(e)
+                outgoing.close(e)
                 return@launch
             } catch (e: Throwable) {
                 if (isActive) terminate(e)
@@ -195,15 +202,15 @@ internal class PipedConnection<Out, In>(
     }
 
     override suspend fun close(cause: Throwable?) {
-        if (closing.compareAndSet(null, Closing(cause))) outgoingChannel.close()
+        if (closing.compareAndSet(null, Closing(cause))) outgoing.close()
         sendJob.join()
         terminate(closing.value?.cause)
     }
 
     private fun terminate(cause: Throwable?) {
         if (!terminated.compareAndSet(false, true)) return
-        incomingChannel.close(cause)
-        outgoingChannel.close(cause)
+        incoming.close(cause)
+        outgoing.close(cause)
         workers.cancel()
         if (cause == null) job.complete()
         else job.cancel(CancellationException("Connection failed", cause))

@@ -112,8 +112,8 @@ class ReconnectingConnector<Out, In> internal constructor(
 class ReconnectingConnection<Out, In> private constructor(
     context: ConnectionContext,
     config: ReconnectConfig,
-    private val connect: suspend (ConnectionContext) -> MessageConnection<Out, In>,
-) : MessageConnection<Out, In> {
+    private val connect: suspend (ConnectionContext) -> ChannelConnection<Out, In>,
+) : ChannelConnection<Out, In> {
     private val job = Job(context.coroutineContext[Job])
     override val coroutineContext: CoroutineContext = context.coroutineContext + job
 
@@ -133,10 +133,10 @@ class ReconnectingConnection<Out, In> private constructor(
     private val stateFlow = MutableStateFlow<ConnectionState>(ConnectionState.Connecting)
     val state: StateFlow<ConnectionState> = stateFlow.asStateFlow()
 
-    private val current = atomic<MessageConnection<Out, In>?>(null)
+    private val current = atomic<ChannelConnection<Out, In>?>(null)
     override val attributes: Attributes get() = current.value?.attributes ?: EMPTY_ATTRIBUTES
 
-    private val hooks = atomic(emptyList<suspend (MessageConnection<Out, In>) -> Unit>())
+    private val hooks = atomic(emptyList<suspend (ChannelConnection<Out, In>) -> Unit>())
     private val pendingReset = atomic(false)
 
     private class Closing(val cause: Throwable?)
@@ -156,7 +156,7 @@ class ReconnectingConnection<Out, In> private constructor(
         suspend fun <Out, In> open(
             context: ConnectionContext,
             config: ReconnectConfig,
-            connect: suspend (ConnectionContext) -> MessageConnection<Out, In>,
+            connect: suspend (ConnectionContext) -> ChannelConnection<Out, In>,
         ): ReconnectingConnection<Out, In> {
             val connection = ReconnectingConnection(context, config, connect)
             val initial = try {
@@ -171,11 +171,11 @@ class ReconnectingConnection<Out, In> private constructor(
     }
 
     /** Registers [hook] to run on every re-established connection, before messages flow again. */
-    fun onReconnect(hook: suspend (connection: MessageConnection<Out, In>) -> Unit) {
+    fun onReconnect(hook: suspend (connection: ChannelConnection<Out, In>) -> Unit) {
         hooks.update { it + hook }
     }
 
-    private fun start(initial: MessageConnection<Out, In>) {
+    private fun start(initial: ChannelConnection<Out, In>) {
         job.invokeOnCompletion { cause -> terminate(cause?.connectionFailure()) }
         current.value = initial
         stateFlow.value = ConnectionState.Connected(initial.attributes, reconnects = 0)
@@ -189,7 +189,7 @@ class ReconnectingConnection<Out, In> private constructor(
         }
     }
 
-    private suspend fun supervise(initial: MessageConnection<Out, In>) {
+    private suspend fun supervise(initial: ChannelConnection<Out, In>) {
         var connection = initial
         var reconnects = 0
         while (true) {
@@ -222,7 +222,7 @@ class ReconnectingConnection<Out, In> private constructor(
     }
 
     /** Copies messages between this connection and [connection] until either side ends. */
-    private suspend fun pump(connection: MessageConnection<Out, In>): Outcome = coroutineScope {
+    private suspend fun pump(connection: ChannelConnection<Out, In>): Outcome = coroutineScope {
         val outcome = CompletableDeferred<Outcome>()
         val receiving = launch {
             val cause = try {
@@ -271,7 +271,7 @@ class ReconnectingConnection<Out, In> private constructor(
     }
 
     /** Reconnects, returning `null` when closed by the user or when reconnecting gave up. */
-    private suspend fun reconnectUnlessClosing(cause: Throwable?): MessageConnection<Out, In>? = coroutineScope {
+    private suspend fun reconnectUnlessClosing(cause: Throwable?): ChannelConnection<Out, In>? = coroutineScope {
         val attempt = async { reconnect(cause) }
         reconnecting.value = attempt
         if (closing.value != null) attempt.cancel()
@@ -285,7 +285,7 @@ class ReconnectingConnection<Out, In> private constructor(
         }
     }
 
-    private suspend fun reconnect(cause: Throwable?): MessageConnection<Out, In>? = coroutineScope {
+    private suspend fun reconnect(cause: Throwable?): ChannelConnection<Out, In>? = coroutineScope {
         val dropper = if (whileDisconnected == DisconnectedSendPolicy.DROP) {
             pending = NO_MESSAGE
             launch { for (ignored in outgoingChannel) {} }

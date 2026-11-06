@@ -15,7 +15,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
-import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.delay
@@ -32,12 +31,6 @@ import kotlin.time.Duration.Companion.seconds
 /** WebSocket sub-protocols registered for STOMP, most recent version first. */
 val STOMP_SUBPROTOCOLS: List<String> = listOf("v12.stomp", "v11.stomp", "v10.stomp")
 
-/** WebSocket transport that negotiates the STOMP sub-protocols. */
-object StompWebSocket : WebSocketConnector(STOMP_SUBPROTOCOLS)
-
-/** STOMP over WebSockets with default settings; use [StompWebSocket].[stomp] to customise. */
-val STOMP: ClientConnector<StompFrame, StompFrame> = StompWebSocket.stomp()
-
 /**
  * Runs STOMP on top of this WebSocket transport.
  *
@@ -46,11 +39,16 @@ val STOMP: ClientConnector<StompFrame, StompFrame> = StompWebSocket.stomp()
  * frame is available as [StompAttributes.Connected]. For subscriptions, receipts and acknowledgements,
  * use a [StompSession].
  */
-fun ClientConnector<Frame, Frame>.stomp(configure: StompConfig.() -> Unit = {}): ClientConnector<StompFrame, StompFrame> {
+fun ClientConnector<Frame, Frame>.withStomp(configure: (@KtorDsl StompConfig).() -> Unit = {}): ClientConnector<StompFrame, StompFrame> {
     val config = StompConfig().apply(configure)
     val transport = this
     return ClientConnector { context, request ->
-        val base = transport.connect(context, request)
+        val base = transport.connect(context, request.copy(
+            headers = headers {
+                appendAll(request.headers)
+                append(HttpHeaders.SecWebSocketProtocol, "v12.stomp")
+            }
+        ))
         try {
             base.stompHandshake(config, defaultHost(request.url))
         } catch (e: Throwable) {
@@ -63,9 +61,8 @@ fun ClientConnector<Frame, Frame>.stomp(configure: StompConfig.() -> Unit = {}):
 /** Connects to a STOMP endpoint and starts a [StompSession] on it. */
 suspend fun HttpClient.stompSession(
     url: String = "",
-    connector: ClientConnector<StompFrame, StompFrame> = STOMP,
-    block: ConnectRequestBuilder.() -> Unit = {},
-): StompSession = StompSession(connect(connector, url, block))
+    connector: ClientConnector<StompFrame, StompFrame> = WebSocket.withStomp(),
+): StompSession = StompSession(connect(connector, url))
 
 class StompConfig {
     /** Virtual host sent in the `host` header; defaults to the host of the connection URL. */
@@ -119,7 +116,7 @@ object StompAttributes {
 }
 
 /** The server's `CONNECTED` frame, for STOMP connections. */
-val MessageConnection<*, *>.stompConnected: StompFrame?
+val ChannelConnection<*, *>.stompConnected: StompFrame?
     get() = attributes.getOrNull(StompAttributes.Connected)
 
 val StompFrame.version: String? get() = this[StompHeaders.VERSION]
@@ -129,7 +126,7 @@ val StompFrame.sessionId: String? get() = this[StompHeaders.SESSION]
 private fun defaultHost(url: String): String =
     runCatching { Url(url).host }.getOrNull()?.takeIf { it.isNotEmpty() } ?: "localhost"
 
-private suspend fun Duplex<Frame>.stompHandshake(config: StompConfig, host: String): Duplex<StompFrame> {
+private suspend fun ChannelDuplex<Frame>.stompHandshake(config: StompConfig, host: String): ChannelDuplex<StompFrame> {
     val base = this
     base.attributes.getOrNull(WebSocketAttributes.Subprotocol)?.let {
         if (it !in STOMP_SUBPROTOCOLS) throw StompConnectException("The server selected an unsupported subprotocol: $it")
@@ -236,7 +233,7 @@ enum class StompAckMode(val header: String) {
  * On a [ReconnectingConnection] (`STOMP.withReconnect()`), the session restores its subscriptions on every
  * new connection; receipts pending when the connection dropped fail with [StompConnectionLostException].
  */
-class StompSession(private val connection: Duplex<StompFrame>) {
+class StompSession(private val connection: ChannelDuplex<StompFrame>) {
     /** `null` once the session is closed. */
     private val subscriptions = atomic<Map<String, StompSubscription>?>(emptyMap())
     private val receipts = atomic<Map<String, CompletableDeferred<StompFrame>>?>(emptyMap())
@@ -279,7 +276,7 @@ class StompSession(private val connection: Duplex<StompFrame>) {
     }
 
     /** Runs on a re-established connection: pending receipts can't arrive anymore, subscriptions must be renewed. */
-    private suspend fun restore(newConnection: MessageConnection<StompFrame, StompFrame>) {
+    private suspend fun restore(newConnection: ChannelConnection<StompFrame, StompFrame>) {
         val lost = StompConnectionLostException()
         while (true) {
             val current = receipts.value ?: return

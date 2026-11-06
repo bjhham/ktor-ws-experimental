@@ -13,11 +13,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-class MessageConnectionTest {
+class ChannelConnectionTest {
 
     @Test
     fun `pair delivers messages in both directions`() = runTest {
-        val (left, right) = MessageConnection.pair<String, Int>(backgroundScope.coroutineContext)
+        val (left, right) = ChannelConnection.pair<String, Int>(backgroundScope.coroutineContext)
         left.outgoing.send("one")
         right.outgoing.send(1)
         assertEquals("one", right.incoming.receive())
@@ -27,7 +27,7 @@ class MessageConnectionTest {
 
     @Test
     fun `close delivers pending messages and ends the other side`() = runTest {
-        val (left, right) = MessageConnection.pair<String, String>(backgroundScope.coroutineContext)
+        val (left, right) = ChannelConnection.pair<String, String>(backgroundScope.coroutineContext)
         launch {
             repeat(3) { left.outgoing.send("m$it") }
             left.close()
@@ -40,7 +40,7 @@ class MessageConnectionTest {
 
     @Test
     fun `failures reach the other side as the close cause`() = runTest {
-        val (left, right) = MessageConnection.pair<String, String>(backgroundScope.coroutineContext)
+        val (left, right) = ChannelConnection.pair<String, String>(backgroundScope.coroutineContext)
         left.cancel(CancellationException("abort", IllegalStateException("boom")))
         val error = assertFailsWith<IllegalStateException> { right.incoming.receive() }
         assertEquals("boom", error.message)
@@ -49,7 +49,7 @@ class MessageConnectionTest {
 
     @Test
     fun `layers map messages and own the underlying connection`() = runTest {
-        val (client, server) = MessageConnection.pair<String, String>(backgroundScope.coroutineContext)
+        val (client, server) = ChannelConnection.pair<String, String>(backgroundScope.coroutineContext)
         val numbers = client.mapMessages<String, Int>(encode = { it.toString() }, decode = { it.toIntOrNull() })
         numbers.outgoing.send(42)
         assertEquals("42", server.incoming.receive())
@@ -64,7 +64,7 @@ class MessageConnectionTest {
 
     @Test
     fun `a layer drains remaining messages when the underlying connection ends`() = runTest {
-        val (client, server) = MessageConnection.pair<String, String>(backgroundScope.coroutineContext)
+        val (client, server) = ChannelConnection.pair<String, String>(backgroundScope.coroutineContext)
         val upper = client.mapMessages<String, String>(encode = { it }, decode = { it.uppercase() })
         server.outgoing.send("a")
         server.outgoing.send("b")
@@ -74,7 +74,7 @@ class MessageConnectionTest {
 
     @Test
     fun `a failing layer cancels the underlying connection`() = runTest {
-        val (client, server) = MessageConnection.pair<String, String>(backgroundScope.coroutineContext)
+        val (client, server) = ChannelConnection.pair<String, String>(backgroundScope.coroutineContext)
         val strict = client.mapMessages<String, Int>(encode = { it.toString() }, decode = { it.toInt() })
         server.outgoing.send("x")
         assertFailsWith<NumberFormatException> { strict.incoming.receive() }
@@ -88,7 +88,7 @@ class MessageConnectionTest {
 
     @Test
     fun `text format layer serializes text frames`() = runTest {
-        val (client, server) = MessageConnection.pair<Frame, Frame>(backgroundScope.coroutineContext)
+        val (client, server) = ChannelConnection.pair<Frame, Frame>(backgroundScope.coroutineContext)
         val greetings = textFormat<Greeting>(Json).wrap(client)
         greetings.outgoing.send(Greeting("hi"))
         assertEquals("""{"text":"hi"}""", (server.incoming.receive() as Frame.Text).readText())

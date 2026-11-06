@@ -22,12 +22,12 @@ class ReconnectTest {
 
     /** Hands out in-memory connections; the server ends of accepted connections arrive on [servers]. */
     private class FakeServer(private val refuse: (attempt: Int) -> Throwable? = { null }) {
-        val servers = Channel<Duplex<String>>(Channel.UNLIMITED)
+        val servers = Channel<ChannelDuplex<String>>(Channel.UNLIMITED)
         var attempts = 0
 
         val connector = ClientConnector<String, String> { context, _ ->
             refuse(++attempts)?.let { throw it }
-            val (client, server) = MessageConnection.pair<String, String>(context.coroutineContext)
+            val (client, server) = ChannelConnection.pair<String, String>(context.coroutineContext)
             servers.trySend(server)
             client
         }

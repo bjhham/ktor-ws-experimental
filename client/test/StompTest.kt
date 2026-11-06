@@ -2,11 +2,9 @@ package io.ktor.client.messaging
 
 import io.ktor.messaging.*
 import io.ktor.server.application.*
-import io.ktor.server.routing.*
 import io.ktor.server.testing.*
 import io.ktor.server.websocket.*
 import io.ktor.utils.io.ExperimentalKtorApi
-import io.ktor.websocket.*
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -155,7 +153,7 @@ class StompTest {
     @Test
     fun `raw stomp connection exposes the CONNECTED frame and subprotocol`() = testApplication {
         stompBroker(connected = mapOf("version" to "1.2", "server" to "test/1.0", "heart-beat" to "0,0"))
-        val connection = wsClient().connect(STOMP, "/stomp")
+        val connection = wsClient().connect(WebSocket.withStomp(), "/stomp")
         val connected = assertNotNull(connection.stompConnected)
         assertEquals("1.2", connected.version)
         assertEquals("test/1.0", connected.server)
@@ -166,7 +164,7 @@ class StompTest {
     @Test
     fun `session restores subscriptions after reconnecting`() = testApplication {
         stompBroker(dropFirstConnectionOnSend = true)
-        val connector = StompWebSocket.stomp { heartBeat = StompHeartBeat.NONE }
+        val connector = WebSocket.withStomp { heartBeat = StompHeartBeat.NONE }
             .withReconnect { delay = { ReconnectDelay.fixed(10.milliseconds) } }
         val session = wsClient().stompSession("/stomp", connector)
         val subscription = session.subscribe("/topic/news", receipt = true)
@@ -189,7 +187,7 @@ class StompTest {
     fun `ERROR during the handshake fails the connection`() = testApplication {
         stompBroker()
         val error = assertFailsWith<StompErrorException> {
-            wsClient().connect(StompWebSocket.stomp { login = "intruder" }, "/stomp")
+            wsClient().connect(WebSocket.withStomp { login = "intruder" }, "/stomp")
         }
         assertEquals("Bad credentials", error.message)
     }
@@ -197,7 +195,7 @@ class StompTest {
     @Test
     fun `missing heart-beats close the connection`() = testApplication {
         stompBroker(connected = mapOf("version" to "1.2", "heart-beat" to "50,0"))
-        val protocol = StompWebSocket.stomp {
+        val protocol = WebSocket.withStomp {
             heartBeat = StompHeartBeat(incoming = 50.milliseconds)
         }
         val connection = wsClient().connect(protocol, "/stomp")

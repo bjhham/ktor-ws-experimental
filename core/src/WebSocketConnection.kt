@@ -13,16 +13,16 @@ object WebSocketAttributes {
 }
 
 /**
- * Exposes this WebSocket session as a [Duplex] of frames. The returned connection owns the session:
+ * Exposes this WebSocket session as a [ChannelDuplex] of frames. The returned connection owns the session:
  * closing it sends a close frame, cancelling it cancels the session.
  */
 fun DefaultWebSocketSession.toConnection(
     parent: CoroutineContext = coroutineContext,
     attributes: Attributes = Attributes(concurrent = true),
-): Duplex<Frame> {
+): ChannelDuplex<Frame> {
     val session = this
     val closed = atomic(false)
-    return MessageConnection(
+    return ChannelConnection(
         parent = parent,
         attributes = attributes,
         receive = { incoming -> for (frame in session.incoming) incoming.send(frame) },

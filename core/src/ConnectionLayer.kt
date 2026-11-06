@@ -15,7 +15,7 @@ import kotlinx.serialization.serializer
  * The returned connection owns [connection]: closing it closes [connection] as well.
  */
 fun interface ConnectionLayer<A, B> {
-    suspend fun wrap(connection: Duplex<A>): Duplex<B>
+    suspend fun wrap(connection: ChannelDuplex<A>): ChannelDuplex<B>
 }
 
 /** Applies [next] after this layer. */
@@ -25,7 +25,7 @@ operator fun <A, B, C> ConnectionLayer<A, B>.plus(next: ConnectionLayer<B, C>): 
 }
 
 /** Wraps [connection] with this layer, cancelling [connection] if wrapping fails. */
-suspend fun <A, B> ConnectionLayer<A, B>.wrapOrCancel(connection: Duplex<A>): Duplex<B> =
+suspend fun <A, B> ConnectionLayer<A, B>.wrapOrCancel(connection: ChannelDuplex<A>): ChannelDuplex<B> =
     try {
         wrap(connection)
     } catch (e: Throwable) {
@@ -49,13 +49,13 @@ fun <Wire, M> codecLayer(factory: () -> MessageCodec<Wire, M>): ConnectionLayer<
     ConnectionLayer { connection -> connection.withCodec(factory()) }
 
 /** Encodes and decodes the messages of this connection with [codec]. */
-fun <Wire, M> Duplex<Wire>.withCodec(codec: MessageCodec<Wire, M>): Duplex<M> = layer(
+fun <Wire, M> ChannelDuplex<Wire>.withCodec(codec: MessageCodec<Wire, M>): ChannelDuplex<M> = layer(
     receive = { from, to -> for (wire in from) for (message in codec.decode(wire)) to.send(message) },
     send = { from, to -> for (message in from) to.send(codec.encode(message)) },
 )
 
 /** Maps the messages of this connection; incoming messages mapped to `null` are skipped. */
-fun <Wire, M> Duplex<Wire>.mapMessages(encode: (M) -> Wire, decode: (Wire) -> M?): Duplex<M> =
+fun <Wire, M> ChannelDuplex<Wire>.mapMessages(encode: (M) -> Wire, decode: (Wire) -> M?): ChannelDuplex<M> =
     withCodec(object : MessageCodec<Wire, M> {
         override fun encode(message: M): Wire = encode(message)
         override fun decode(wire: Wire): List<M> = listOfNotNull(decode(wire))
